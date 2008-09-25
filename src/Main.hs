@@ -295,11 +295,11 @@ mvsOn gms = do
     gm = head gms
     wat = hPutStrLn stderr "I didn't understand your move." >> mvsOn gms
     noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn gms
-    pIn = prIn $ gmProc gm
+    Proc pIn _ _ pId = gmProc gm
   print $ gmBd gm 
   mvStr <- getLine
   case mvStr of
-    "q" -> return ()
+    "q" -> terminateProcess pId >> return ()
     "r" -> main
     -- todo error checking in undo
     "u" -> case gms of
