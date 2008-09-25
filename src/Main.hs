@@ -50,18 +50,22 @@ data Proc = Proc {
 
 instance Show BdSq where
   show Emp = " "
+  -- I didn't like how the bishop and pawns look too similar in tiny font,
+  -- so I'm using little triangles for pawns.
   show (HasP CW 'K') = toUtf "♚"
   show (HasP CW 'Q') = toUtf "♛"
   show (HasP CW 'R') = toUtf "♜"
   show (HasP CW 'B') = toUtf "♝"
   show (HasP CW 'N') = toUtf "♞"
-  show (HasP CW 'P') = toUtf "♟"
+  --show (HasP CW 'P') = toUtf "♟"
+  show (HasP CW 'P') = toUtf "▴"
   show (HasP CB 'K') = toUtf "♔"
   show (HasP CB 'Q') = toUtf "♕"
   show (HasP CB 'R') = toUtf "♖"
   show (HasP CB 'B') = toUtf "♗"
   show (HasP CB 'N') = toUtf "♘"
-  show (HasP CB 'P') = toUtf "♙"
+  --show (HasP CB 'P') = toUtf "♙"
+  show (HasP CB 'P') = toUtf "▵"
 
 instance Show Bd where
   show (Bd bd) = let
