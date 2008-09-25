@@ -248,6 +248,7 @@ doMv tellEng mvStr mv gm = do
     doChanges changes = if tellEng
       then do
         hPutStrLn pIn mvStr
+        --hPutStrLn pIn "go"
         hPutStrLn pIn "?"
         hFlush pIn
         'm':'o':'v':'e':' ':compMvStr <- getMove gm
@@ -288,21 +289,38 @@ doMv tellEng mvStr mv gm = do
         ]
     mv -> return Nothing
 
-mvsOn :: Game -> IO ()
-mvsOn gm = do
+mvsOn :: [Game] -> IO ()
+mvsOn gms = do
+  let 
+    gm = head gms
+    wat = hPutStrLn stderr "I didn't understand your move." >> mvsOn gms
+    noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn gms
+    pIn = prIn $ gmProc gm
   print $ gmBd gm 
   mvStr <- getLine
-  let wat = hPutStrLn stderr "I didn't understand your move." >> mvsOn gm
   case mvStr of
     "q" -> return ()
     "r" -> main
+    -- todo error checking in undo
+    "u" -> case gms of
+      [_] -> noUndo
+      _ -> do
+        --hPutStrLn pIn "force"
+        hPutStrLn pIn "undo"
+        hPutStrLn pIn "undo"
+        hFlush pIn
+        mvsOn $ tail gms
     _ -> case resolveMv gm $ parseMv mvStr of
       Just mv -> do
         gm' <- doMv True mvStr mv gm
         case gm' of
-          Just gm'' -> mvsOn gm''
+          Just gm'' -> mvsOn (gm'':gms)
           Nothing -> wat
       Nothing -> wat
 
 main :: IO ()
-main = clrScr >> putStrLn "" >> initGm >>= mvsOn
+main = do
+  clrScr 
+  putStrLn "" 
+  gm <- initGm 
+  mvsOn [gm]
