@@ -21,6 +21,6 @@ instance Arbitrary Col where
   coarbitrary c = variant . ord $ unCol c
 
 chkPawn :: Col -> PawnDestRow -> Bool
-chkPawn c r = doMv [unCol c, unPawnDestRow r] initGm /= initGm
+chkPawn c r = gmBd (doMv [unCol c, unPawnDestRow r] initGm) /= gmBd initGm
 
 qc = verboseCheck chkPawn

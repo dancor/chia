@@ -4,6 +4,7 @@ import Control.Applicative
 import Control.Monad.State
 import Data.Array
 import Data.Char
+import Data.List
 import Data.Maybe
 import FUtil
 import System.IO
@@ -28,8 +29,9 @@ data Game = Game {
   gmBd :: Bd,
   gmTurn :: Color,
   gmLastPawn2 :: Maybe Pt,
-  gmCanCastle :: M.Map Color (S.Set Piece)
-  } deriving Eq
+  gmCanCastle :: M.Map Color (S.Set Piece),
+  gmProc :: Proc
+  }
 data Move = Move {
   fromP :: Maybe Piece,
   fromX :: Maybe Int,
@@ -39,6 +41,12 @@ data Move = Move {
   toY :: Maybe Int,
   promote :: Maybe Piece
   } | Castle Piece deriving Show
+data Proc = Proc {
+  prIn :: Handle,
+  prOut :: Handle,
+  prErr :: Handle,
+  prId :: ProcessHandle
+  }
 
 instance Show BdSq where
   show Emp = " "
@@ -66,19 +74,25 @@ instance Show Bd where
     in (interlines . map concat . splitN bdW . map showAlt . assocs) bd ++
       AC.normal
 
-initGm :: Game
-initGm = let
-  backrow = "RNBQKBNR"
-  frontrow = replicate bdW 'P'
-  b = map (HasP CB) $ backrow ++ frontrow
-  empzone = replicate (bdW * (bdH - 4)) Emp
-  w = map (HasP CW) $ frontrow ++ backrow
-  in Game {
+initGm :: IO Game
+initGm = do
+  let
+    backrow = "RNBQKBNR"
+    frontrow = replicate bdW 'P'
+    b = map (HasP CB) $ backrow ++ frontrow
+    empzone = replicate (bdW * (bdH - 4)) Emp
+    w = map (HasP CW) $ frontrow ++ backrow
+  (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
+  hPutStrLn pIn "xboard"
+  hPutStrLn pIn "st 0.1"
+  hFlush pIn
+  return $ Game {
     gmBd = Bd $ listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
     gmTurn = CW,
     gmLastPawn2 = Nothing,
-    gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]]
-  }
+    gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
+    gmProc = Proc pIn pOut pErr pId 
+    }
 
 modRet :: (MonadState t1 t) => (t1 -> (t2, t1)) -> t t2
 modRet f = do
@@ -100,7 +114,7 @@ parseMv mvStr = case mvStr of
     tryFrom :: String -> String -> (Maybe Char, String)
     tryFrom chs s = if null s then (Nothing, s) else let s1:sRest = s in 
       if s1 `elem` chs then (Just s1, sRest) else (Nothing, s)
-    in flip evalState mvStr $ do
+    in flip evalState (filter (`elem` pChs ++ xChs ++ yChs ++ "x") mvStr) $ do
       fromP <- modRet (tryFrom pChs)
       x1 <- (parseX <$>) <$> modRet (tryFrom xChs)
       y1 <- (parseY <$>) <$> modRet (tryFrom yChs)
@@ -216,22 +230,51 @@ isEmp _ = False
 isPawn (HasP _ 'P') = True
 isPawn _ = False
 
-doMv :: Move -> Game -> Maybe Game
-doMv mv gm = let 
-  Bd bd = gmBd gm
-  doChanges changes = Just $ gm {
-    gmBd = Bd $ bd // changes,
-    gmTurn = if gmTurn gm == CW then CB else CW
-    }
-  in case mv of
-    Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} -> let
-      changes = [
-        ((y2, x2), bd ! (y1, x1)),
-        ((y1, x1), Emp)
-        ]
-      -- en passant
-      changes' = if isPawn (bd ! (y1, x1)) && isEmp (bd ! (y2, x2)) && x1 /= x2
-        then ((y1, x2), Emp):changes else changes
+untilM t f = do
+  y <- f
+  print y
+  if t y then return y else untilM t f
+
+getMove :: Game -> IO [Char]
+getMove gm = do
+  let
+    Proc pIn pOut pErr pId = gmProc gm
+  untilM ("move " `isPrefixOf`) $ hGetLine pOut
+
+doMv :: Bool -> String -> Move -> Game -> IO (Maybe Game)
+doMv tellEng mvStr mv gm = do
+  let 
+    Bd bd = gmBd gm
+    Proc pIn pOut pErr pId = gmProc gm
+    doChanges changes = if tellEng
+      then do
+        hPutStrLn pIn mvStr
+        hPutStrLn pIn "?"
+        hFlush pIn
+        'm':'o':'v':'e':' ':compMvStr <- getMove gm
+        -- todo: handle error from engine
+        let
+          gm' = gm {
+            gmBd = Bd $ bd // changes,
+            gmTurn = if gmTurn gm == CW then CB else CW
+            }
+          Just compMv = resolveMv gm' $ parseMv compMvStr
+        doMv False "" compMv gm'
+      else return . Just $ gm {
+        gmBd = Bd $ bd // changes,
+        gmTurn = if gmTurn gm == CW then CB else CW
+        }
+  case mv of
+    Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} -> 
+      let
+        changes = [
+          ((y2, x2), bd ! (y1, x1)),
+          ((y1, x1), Emp)
+          ]
+        -- en passant
+        changes' = if 
+          isPawn (bd ! (y1, x1)) && isEmp (bd ! (y2, x2)) && x1 /= x2
+          then ((y1, x2), Emp):changes else changes
       in doChanges changes'
     Castle p -> let 
       c = gmTurn gm
@@ -242,7 +285,7 @@ doMv mv gm = let
         ((y, xKf), Emp), ((y, xKt), HasP c 'K'),
         ((y, xRf), Emp), ((y, xRt), HasP c 'R')
         ]
-    mv -> Nothing
+    mv -> return Nothing
 
 mvsOn :: Game -> IO ()
 mvsOn gm = do
@@ -251,16 +294,14 @@ mvsOn gm = do
   let wat = hPutStrLn stderr "I didn't understand your move." >> mvsOn gm
   case mvStr of
     "q" -> return ()
+    "r" -> main
     _ -> case resolveMv gm $ parseMv mvStr of
-      Just mv -> case doMv mv gm of
-        Just gm' -> mvsOn gm'
-        Nothing -> wat
+      Just mv -> do
+        gm' <- doMv True mvStr mv gm
+        case gm' of
+          Just gm'' -> mvsOn gm''
+          Nothing -> wat
       Nothing -> wat
 
 main :: IO ()
-main = mvsOn initGm
-  {-
-  (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
-  hPutStrLn pIn "xboard"
-  hPutStrLn pIn "quit"
-  -}
+main = mvsOn =<< initGm
