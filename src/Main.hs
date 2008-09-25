@@ -199,6 +199,7 @@ sqCanGetTo (y, x) gm isATake = let
 
 -- one or more of x1, y1 could be missing
 -- todo: when ambiguous, we should error instead of picking one?
+-- -- engine gets that for us
 resolveMv :: Game -> Move -> Maybe Move
 resolveMv gm mv0 = let
 
@@ -238,11 +239,17 @@ untilM t f = do
   y <- f
   if t y then return y else untilM t f
 
+debugLog s = appendFile "lol" $ s ++ "\n"
+
 getMove :: Game -> IO [Char]
 getMove gm = do
   let
     Proc pIn pOut pErr pId = gmProc gm
-  untilM ("move " `isPrefixOf`) $ hGetLine pOut
+  untilM (\ l -> "move " `isPrefixOf` l || "Illegal move: " `isPrefixOf` l) $
+    do
+      l <- hGetLine pOut
+      --debugLog l
+      return l
 
 doMv :: Bool -> String -> Move -> Game -> IO (Maybe Game)
 doMv tellEng mvStr mv gm = do
@@ -255,17 +262,23 @@ doMv tellEng mvStr mv gm = do
         --hPutStrLn pIn "go"
         hPutStrLn pIn "?"
         hFlush pIn
-        'm':'o':'v':'e':' ':compMvStr <- getMove gm
+        compStr <- getMove gm
+        --debugLog $ "COMPSTR: " ++ compStr 
         clrScr
-        putStrLn compMvStr
-        -- todo: handle error from engine
-        let
-          gm' = gm {
-            gmBd = Bd $ bd // changes,
-            gmTurn = if gmTurn gm == CW then CB else CW
-            }
-          Just compMv = resolveMv gm' $ parseMv compMvStr
-        doMv False "" compMv gm'
+        if "Illegal move: " `isPrefixOf` compStr 
+          then do
+            --putStrLn compStr
+            return Nothing 
+          else do
+            let 
+              'm':'o':'v':'e':' ':compMvStr = compStr
+              gm' = gm {
+                gmBd = Bd $ bd // changes,
+                gmTurn = if gmTurn gm == CW then CB else CW
+                }
+              Just compMv = resolveMv gm' $ parseMv compMvStr
+            putStrLn compMvStr
+            doMv False "" compMv gm'
       else return . Just $ gm {
         gmBd = Bd $ bd // changes,
         gmTurn = if gmTurn gm == CW then CB else CW
