@@ -232,7 +232,6 @@ isPawn _ = False
 
 untilM t f = do
   y <- f
-  print y
   if t y then return y else untilM t f
 
 getMove :: Game -> IO [Char]
@@ -252,6 +251,8 @@ doMv tellEng mvStr mv gm = do
         hPutStrLn pIn "?"
         hFlush pIn
         'm':'o':'v':'e':' ':compMvStr <- getMove gm
+        clrScr
+        putStrLn compMvStr
         -- todo: handle error from engine
         let
           gm' = gm {
@@ -304,4 +305,4 @@ mvsOn gm = do
       Nothing -> wat
 
 main :: IO ()
-main = mvsOn =<< initGm
+main = clrScr >> putStrLn "" >> initGm >>= mvsOn
