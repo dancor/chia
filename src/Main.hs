@@ -75,8 +75,9 @@ instance Show Bd where
         HasP CW c -> show $ HasP CB c
         HasP CB c -> show $ HasP CW c
       else AC.blackBg ++ AC.white ++ show p
-    in (interlines . map concat . splitN bdW . map showAlt . assocs) bd ++
-      AC.normal
+    stopWeirdWhiteLinesInTermSometimes = (++ AC.blackBg)
+    in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) . 
+    splitN bdW . map showAlt . assocs) bd ++ AC.normal
 
 initGm :: IO Game
 initGm = do
