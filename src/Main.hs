@@ -7,6 +7,8 @@ import Data.Char
 import Data.List
 import Data.Maybe
 import FUtil
+import System.Directory
+import System.Environment
 import System.IO
 import System.Process
 import qualified AnsiColor as AC
@@ -159,12 +161,14 @@ parseMv mvStr = case mvStr of
 
 type Dir = Int -- 0 is East, 1 is North-East, .., 7
 
+onBd :: (Int, Int) -> Bool
 onBd (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
 
 -- We cheat and return more squares than may actually be legal.
 -- The engine does validation; we just need enough to do move disambiguation.
 -- todo: We _do_ have to worry about exposed check for disambig unfortunately.
 --       (but extremely rarely; I think crafty/xboard fuck this up actually!)
+sqCanGetTo :: (Int, Int) -> Game -> Bool -> [(Int, Int)]
 sqCanGetTo (y, x) gm isATake = let
   Bd bd = gmBd gm
   HasP turn p = bd ! (y, x)
@@ -230,17 +234,24 @@ resolveMv gm mv0 = let
     Castle _ -> Just mv0
     _ -> Nothing
 
+isEmp :: BdSq -> Bool
 isEmp Emp = True
 isEmp _ = False
 
+isPawn :: BdSq -> Bool
 isPawn (HasP _ 'P') = True
 isPawn _ = False
 
+untilM :: (Monad t) => (t1 -> Bool) -> t t1 -> t t1
 untilM t f = do
   y <- f
   if t y then return y else untilM t f
 
-debugLog s = appendFile "lol" $ s ++ "\n"
+debugLog :: [Char] -> IO ()
+debugLog s = do
+  home <- getEnv "HOME"
+  createDirectoryIfMissing False $ home ++ "/.chia"
+  appendFile (home ++ "/.chia/englog") $ s ++ "\n"
 
 getMove :: Game -> IO [Char]
 getMove gm = do
@@ -249,7 +260,7 @@ getMove gm = do
   untilM (\ l -> "move " `isPrefixOf` l || "Illegal move: " `isPrefixOf` l) $
     do
       l <- hGetLine pOut
-      --debugLog l
+      debugLog l
       return l
 
 doMv :: Bool -> String -> Move -> Game -> IO (Maybe Game)
@@ -264,7 +275,7 @@ doMv tellEng mvStr mv gm = do
         hPutStrLn pIn "?"
         hFlush pIn
         compStr <- getMove gm
-        --debugLog $ "COMPSTR: " ++ compStr 
+        debugLog $ "COMPSTR: " ++ compStr 
         clrScr
         if "Illegal move: " `isPrefixOf` compStr 
           then do
