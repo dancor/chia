@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Applicative
+import Control.Arrow
 import Control.Monad.State
 import Data.Array
 import Data.Char
@@ -257,7 +258,7 @@ getMove :: Game -> IO [Char]
 getMove gm = do
   let
     Proc pIn pOut pErr pId = gmProc gm
-  untilM (\ l -> "move " `isPrefixOf` l || "Illegal move: " `isPrefixOf` l) $
+  untilM (\ l -> "move " `isPrefixOf` l || "Illegal move" `isPrefixOf` l) $
     do
       l <- hGetLine pOut
       debugLog l
@@ -297,16 +298,17 @@ doMv tellEng mvStr mv gm = do
         }
   case mv of
     Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} -> 
-      let
+      doChanges . considerEnPassant . considerPromotion $ changes where
         changes = [
           ((y2, x2), bd ! (y1, x1)),
           ((y1, x1), Emp)
           ]
-        -- en passant
-        changes' = if 
+        considerEnPassant changes = if 
           isPawn (bd ! (y1, x1)) && isEmp (bd ! (y2, x2)) && x1 /= x2
           then ((y1, x2), Emp):changes else changes
-      in doChanges changes'
+        considerPromotion changes = case promote mv of
+          Nothing -> changes
+          Just p -> onHead (second . const $ HasP (gmTurn gm) p) changes
     Castle p -> let 
       c = gmTurn gm
       y = if c == CW then 8 else 1
@@ -318,11 +320,14 @@ doMv tellEng mvStr mv gm = do
         ]
     mv -> return Nothing
 
+onHead :: (a -> a) -> [a] -> [a]
+onHead f (x:xs) = (f x):xs
+
 mvsOn :: [Game] -> IO ()
 mvsOn gms = do
   let 
     gm = head gms
-    wat = hPutStrLn stderr "I didn't understand your move." >> mvsOn gms
+    wat mvStr = clrScr >> hPutStrLn stderr (show mvStr ++ "?") >> mvsOn gms
     noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn gms
     Proc pIn _ _ pId = gmProc gm
   print $ gmBd gm 
@@ -334,6 +339,7 @@ mvsOn gms = do
     "u" -> case gms of
       [_] -> noUndo
       _ -> do
+        clrScr
         --hPutStrLn pIn "force"
         hPutStrLn pIn "undo"
         hPutStrLn pIn "undo"
@@ -344,8 +350,8 @@ mvsOn gms = do
         gm' <- doMv True mvStr mv gm
         case gm' of
           Just gm'' -> mvsOn (gm'':gms)
-          Nothing -> wat
-      Nothing -> wat
+          Nothing -> wat mvStr
+      Nothing -> wat mvStr
 
 main :: IO ()
 main = do
