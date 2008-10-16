@@ -93,6 +93,7 @@ initGm = do
   (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
   hPutStrLn pIn "xboard"
   hPutStrLn pIn "st 0.1"
+  hPutStrLn pIn "skill 50"
   hFlush pIn
   return $ Game {
     gmBd = Bd $ listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
@@ -258,7 +259,8 @@ getMove :: Game -> IO [Char]
 getMove gm = do
   let
     Proc pIn pOut pErr pId = gmProc gm
-  untilM (\ l -> "move " `isPrefixOf` l || "Illegal move" `isPrefixOf` l) $
+  untilM (\ l -> any (`isPrefixOf` l) 
+    ["move", "Illegal move", "1/2-1/2", "1-0", "0-1"]) $
     do
       l <- hGetLine pOut
       debugLog l
@@ -278,11 +280,8 @@ doMv tellEng mvStr mv gm = do
         compStr <- getMove gm
         debugLog $ "COMPSTR: " ++ compStr 
         clrScr
-        if "Illegal move: " `isPrefixOf` compStr 
+        if "move" `isPrefixOf` compStr 
           then do
-            --putStrLn compStr
-            return Nothing 
-          else do
             let 
               'm':'o':'v':'e':' ':compMvStr = compStr
               gm' = gm {
@@ -292,6 +291,9 @@ doMv tellEng mvStr mv gm = do
               Just compMv = resolveMv gm' $ parseMv compMvStr
             putStrLn compMvStr
             doMv False "" compMv gm'
+          else do
+            --putStrLn compStr
+            return Nothing 
       else return . Just $ gm {
         gmBd = Bd $ bd // changes,
         gmTurn = if gmTurn gm == CW then CB else CW
@@ -340,6 +342,7 @@ mvsOn gms = do
       [_] -> noUndo
       _ -> do
         clrScr
+        putStrLn ""
         --hPutStrLn pIn "force"
         hPutStrLn pIn "undo"
         hPutStrLn pIn "undo"
