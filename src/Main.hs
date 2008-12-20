@@ -349,9 +349,18 @@ mvsOn gms = do
         hFlush pIn
         mvsOn $ tail gms
     "s" -> do
-      writeFile "game.pgn" . interwords .
-        zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
-        splitN 2 $ gmHist gm
+      writeFile "game.pgn" . unlines $ [
+          "[Event \"?\"]",
+          "[Site \"?\"]",
+          "[Date \"?\"]",
+          "[Round \"-\"]",
+          "[White \"danl\"]",
+          "[Black \"crafty\"]",
+          "[Result \"?\"]",
+          "",
+          interwords .
+          zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
+          splitN 2 $ gmHist gm]
       mvsOn gms
     _ -> case resolveMv gm $ parseMv mvStr of
       Just mv -> do
