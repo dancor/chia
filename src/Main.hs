@@ -33,7 +33,8 @@ data Game = Game {
   gmTurn :: Color,
   gmLastPawn2 :: Maybe Pt,
   gmCanCastle :: M.Map Color (S.Set Piece),
-  gmProc :: Proc
+  gmProc :: Proc,
+  gmHist :: [String]
   }
 data Move = Move {
   fromP :: Maybe Piece,
@@ -72,14 +73,14 @@ instance Show BdSq where
 
 instance Show Bd where
   show (Bd bd) = let
-    showAlt ((i, j), p) = if (i + j) `mod` 2 == 0 
+    showAlt ((i, j), p) = if (i + j) `mod` 2 == 0
       then AC.whiteBg ++ AC.black ++ case p of
         Emp -> show p
         HasP CW c -> show $ HasP CB c
         HasP CB c -> show $ HasP CW c
       else AC.blackBg ++ AC.white ++ show p
     stopWeirdWhiteLinesInTermSometimes = (++ AC.blackBg)
-    in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) . 
+    in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) .
     splitN bdW . map showAlt . assocs) bd ++ AC.normal
 
 initGm :: IO Game
@@ -100,7 +101,8 @@ initGm = do
     gmTurn = CW,
     gmLastPawn2 = Nothing,
     gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
-    gmProc = Proc pIn pOut pErr pId 
+    gmProc = Proc pIn pOut pErr pId,
+    gmHist = []
     }
 
 modRet :: (MonadState t1 t) => (t1 -> (t2, t1)) -> t t2
@@ -121,7 +123,7 @@ parseMv mvStr = case mvStr of
     parseX x = ord x - ord 'a' + 1
     parseY y = bdH - ord y + ord '1'
     tryFrom :: String -> String -> (Maybe Char, String)
-    tryFrom chs s = if null s then (Nothing, s) else let s1:sRest = s in 
+    tryFrom chs s = if null s then (Nothing, s) else let s1:sRest = s in
       if s1 `elem` chs then (Just s1, sRest) else (Nothing, s)
     in flip evalState (filter (`elem` pChs ++ xChs ++ yChs ++ "x") mvStr) $ do
       fromP <- modRet (tryFrom pChs)
@@ -133,7 +135,7 @@ parseMv mvStr = case mvStr of
       promote <- modRet (tryFrom pChs)
       g <- get
       if null g && not isATake
-        then do 
+        then do
           return $ Move {
             fromP = fromP,
             fromX = Nothing,
@@ -186,9 +188,9 @@ sqCanGetTo (y, x) gm isATake = let
       5 -> (yPos - 1, xPos - 1)
       6 -> (yPos - 1, xPos)
       7 -> (yPos - 1, xPos + 1)
-    in if onBd pos' 
+    in if onBd pos'
       then case bd ! pos' of
-        Emp -> (if isATake && not takeAll then id else (pos':)) $ 
+        Emp -> (if isATake && not takeAll then id else (pos':)) $
           tryDirPos pos' takeAll (dist - 1) dir
         _ -> if isATake then [pos'] else []
       else []
@@ -200,7 +202,7 @@ sqCanGetTo (y, x) gm isATake = let
     'N' -> filter onBd $
       [(y + oy, x + ox) | oy <- [-2, 2], ox <- [-1, 1]] ++
       [(y + oy, x + ox) | oy <- [-1, 1], ox <- [-2, 2]]
-    'P' -> if isATake 
+    'P' -> if isATake
       then concatMap (tryDir True 1) (if turn == CW then [5, 7] else [1, 3])
       else tryDir False 2 (if turn == CW then 6 else 2)
 
@@ -221,16 +223,16 @@ resolveMv gm mv0 = let
     eqOrN x yMbF = case yMbF mv of
       Just y -> x == y
       Nothing -> True
-    in if turn == gmTurn gm && 
+    in if turn == gmTurn gm &&
       eqOrN x fromX && eqOrN y fromY && p == fromJust (fromP mv) &&
-      (fromJust $ toY mv, fromJust $ toX mv) `elem` 
+      (fromJust $ toY mv, fromJust $ toX mv) `elem`
       sqCanGetTo (y, x) gm (isATake mv)
       then mv {fromX = Just x, fromY = Just y}
       else mv
   tryXY _ mv = mv
   in case mv0 of
     Move {toX = Just _, toY = Just _} ->
-      if isJust (fromX mv0) && isJust (fromY mv0) 
+      if isJust (fromX mv0) && isJust (fromY mv0)
         then Just mv0
         else Just . foldr tryXY (fillP mv0) $ assocs bd
     Castle _ -> Just mv0
@@ -259,7 +261,7 @@ getMove :: Game -> IO [Char]
 getMove gm = do
   let
     Proc pIn pOut pErr pId = gmProc gm
-  untilM (\ l -> any (`isPrefixOf` l) 
+  untilM (\ l -> any (`isPrefixOf` l)
     ["move", "Illegal move", "1/2-1/2", "1-0", "0-1"]) $
     do
       l <- hGetLine pOut
@@ -268,7 +270,7 @@ getMove gm = do
 
 doMv :: Bool -> String -> Move -> Game -> IO (Maybe Game)
 doMv tellEng mvStr mv gm = do
-  let 
+  let
     Bd bd = gmBd gm
     Proc pIn pOut pErr pId = gmProc gm
     doChanges changes = if tellEng
@@ -278,40 +280,38 @@ doMv tellEng mvStr mv gm = do
         hPutStrLn pIn "?"
         hFlush pIn
         compStr <- getMove gm
-        debugLog $ "COMPSTR: " ++ compStr 
+        debugLog $ "COMPSTR: " ++ compStr
         clrScr
-        if "move" `isPrefixOf` compStr 
+        if "move " `isPrefixOf` compStr
           then do
-            let 
+            let
               'm':'o':'v':'e':' ':compMvStr = compStr
-              gm' = gm {
-                gmBd = Bd $ bd // changes,
-                gmTurn = if gmTurn gm == CW then CB else CW
-                }
               Just compMv = resolveMv gm' $ parseMv compMvStr
             putStrLn compMvStr
-            doMv False "" compMv gm'
+            doMv False compMvStr compMv gm'
           else do
             --putStrLn compStr
-            return Nothing 
-      else return . Just $ gm {
+            return Nothing
+      else return $ Just gm'
+      where gm' = gm {
         gmBd = Bd $ bd // changes,
-        gmTurn = if gmTurn gm == CW then CB else CW
+        gmTurn = if gmTurn gm == CW then CB else CW,
+        gmHist = gmHist gm ++ [mvStr]
         }
   case mv of
-    Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} -> 
+    Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} ->
       doChanges . considerEnPassant . considerPromotion $ changes where
         changes = [
           ((y2, x2), bd ! (y1, x1)),
           ((y1, x1), Emp)
           ]
-        considerEnPassant changes = if 
+        considerEnPassant changes = if
           isPawn (bd ! (y1, x1)) && isEmp (bd ! (y2, x2)) && x1 /= x2
           then ((y1, x2), Emp):changes else changes
         considerPromotion changes = case promote mv of
           Nothing -> changes
           Just p -> onHead (second . const $ HasP (gmTurn gm) p) changes
-    Castle p -> let 
+    Castle p -> let
       c = gmTurn gm
       y = if c == CW then 8 else 1
       xKf = 5
@@ -327,12 +327,12 @@ onHead f (x:xs) = (f x):xs
 
 mvsOn :: [Game] -> IO ()
 mvsOn gms = do
-  let 
+  let
     gm = head gms
     wat mvStr = clrScr >> hPutStrLn stderr (show mvStr ++ "?") >> mvsOn gms
     noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn gms
     Proc pIn _ _ pId = gmProc gm
-  print $ gmBd gm 
+  print $ gmBd gm
   mvStr <- getLine
   case mvStr of
     "q" -> terminateProcess pId >> return ()
@@ -348,17 +348,22 @@ mvsOn gms = do
         hPutStrLn pIn "undo"
         hFlush pIn
         mvsOn $ tail gms
+    "s" -> do
+      writeFile "game.pgn" . interwords .
+        zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
+        splitN 2 $ gmHist gm
+      mvsOn gms
     _ -> case resolveMv gm $ parseMv mvStr of
       Just mv -> do
-        gm' <- doMv True mvStr mv gm
-        case gm' of
-          Just gm'' -> mvsOn (gm'':gms)
+        gmMb <- doMv True mvStr mv gm
+        case gmMb of
+          Just gm' -> mvsOn (gm':gms)
           Nothing -> wat mvStr
       Nothing -> wat mvStr
 
 main :: IO ()
 main = do
-  clrScr 
-  putStrLn "" 
-  gm <- initGm 
+  clrScr
+  putStrLn ""
+  gm <- initGm
   mvsOn [gm]
