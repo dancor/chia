@@ -2,6 +2,7 @@ module Main where
 
 import Control.Applicative
 import Control.Arrow
+import Control.Monad.Error
 import Control.Monad.State
 import Data.Array
 import Data.Char
@@ -34,7 +35,11 @@ data Game = Game {
   gmLastPawn2 :: Maybe Pt,
   gmCanCastle :: M.Map Color (S.Set Piece),
   gmProc :: Proc,
-  gmHist :: [String]
+  gmHist :: [String],
+  gmHumans :: Int
+  }
+data St = St {
+  stHumans :: Int
   }
 data Move = Move {
   fromP :: Maybe Piece,
@@ -94,6 +99,7 @@ initGm = do
   (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
   hPutStrLn pIn "xboard"
   hPutStrLn pIn "st 0.1"
+  hPutStrLn pIn "easy"
   hPutStrLn pIn "skill 50"
   hFlush pIn
   return $ Game {
@@ -102,7 +108,8 @@ initGm = do
     gmLastPawn2 = Nothing,
     gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
     gmProc = Proc pIn pOut pErr pId,
-    gmHist = []
+    gmHist = [],
+    gmHumans = 1
     }
 
 modRet :: (MonadState t1 t) => (t1 -> (t2, t1)) -> t t2
@@ -209,9 +216,8 @@ sqCanGetTo (y, x) gm isATake = let
 -- one or more of x1, y1 could be missing
 -- todo: when ambiguous, we should error instead of picking one?
 -- -- engine gets that for us
-resolveMv :: Game -> Move -> Maybe Move
+resolveMv :: Game -> Move -> Either String Move
 resolveMv gm mv0 = let
-
   -- when start spot is omitted, we will know the piece
   fillP mv = case fromP mv of
     Just _ -> mv
@@ -231,12 +237,12 @@ resolveMv gm mv0 = let
       else mv
   tryXY _ mv = mv
   in case mv0 of
-    Move {toX = Just _, toY = Just _} ->
+    Move {toX = Just _, toY = Just _} -> Right $
       if isJust (fromX mv0) && isJust (fromY mv0)
-        then Just mv0
-        else Just . foldr tryXY (fillP mv0) $ assocs bd
-    Castle _ -> Just mv0
-    _ -> Nothing
+        then mv0
+        else foldr tryXY (fillP mv0) $ assocs bd
+    Castle _ -> Right mv0
+    _ -> Left "Could not resolve move"
 
 isEmp :: BdSq -> Bool
 isEmp Emp = True
@@ -247,9 +253,11 @@ isPawn (HasP _ 'P') = True
 isPawn _ = False
 
 untilM :: (Monad t) => (t1 -> Bool) -> t t1 -> t t1
-untilM t f = do
-  y <- f
-  if t y then return y else untilM t f
+untilM t f = f >>= \ y -> if t y then return y else untilM t f
+
+-- should this pre-test?  post-test currently
+untilCombM :: (Monad t) => (a -> Bool) -> a -> (a -> t a) -> t a
+untilCombM t x f = f x >>= \ y -> if t y then return y else untilCombM t y f
 
 debugLog :: [Char] -> IO ()
 debugLog s = do
@@ -268,70 +276,98 @@ getMove gm = do
       debugLog l
       return l
 
-doMv :: Bool -> String -> Move -> Game -> IO (Maybe Game)
-doMv tellEng mvStr mv gm = do
-  let
-    Bd bd = gmBd gm
-    Proc pIn pOut pErr pId = gmProc gm
-    doChanges changes = if tellEng
-      then do
-        hPutStrLn pIn mvStr
-        --hPutStrLn pIn "go"
-        hPutStrLn pIn "?"
-        hFlush pIn
-        compStr <- getMove gm
-        debugLog $ "COMPSTR: " ++ compStr
-        clrScr
-        if "move " `isPrefixOf` compStr
-          then do
-            let
-              'm':'o':'v':'e':' ':compMvStr = compStr
-              Just compMv = resolveMv gm' $ parseMv compMvStr
-            putStrLn compMvStr
-            doMv False compMvStr compMv gm'
-          else do
-            --putStrLn compStr
-            return Nothing
-      else return $ Just gm'
-      where gm' = gm {
-        gmBd = Bd $ bd // changes,
-        gmTurn = if gmTurn gm == CW then CB else CW,
-        gmHist = gmHist gm ++ [mvStr]
-        }
-  case mv of
-    Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} ->
-      doChanges . considerEnPassant . considerPromotion $ changes where
-        changes = [
-          ((y2, x2), bd ! (y1, x1)),
-          ((y1, x1), Emp)
-          ]
-        considerEnPassant changes = if
-          isPawn (bd ! (y1, x1)) && isEmp (bd ! (y2, x2)) && x1 /= x2
-          then ((y1, x2), Emp):changes else changes
-        considerPromotion changes = case promote mv of
-          Nothing -> changes
-          Just p -> onHead (second . const $ HasP (gmTurn gm) p) changes
-    Castle p -> let
-      c = gmTurn gm
-      y = if c == CW then 8 else 1
-      xKf = 5
-      (xKt, xRf, xRt) = if p == 'K' then (7, 8, 6) else (3, 1, 4)
-      in doChanges [
-        ((y, xKf), Emp), ((y, xKt), HasP c 'K'),
-        ((y, xRf), Emp), ((y, xRt), HasP c 'R')
+doMvPure :: String -> Move -> Game -> Either String Game
+doMvPure mvStr mv gm = case mv of
+  Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} ->
+    doChanges . considerEnPassant . considerPromotion $ changes where
+      changes = [
+        ((y2, x2), bd ! (y1, x1)),
+        ((y1, x1), Emp)
         ]
-    mv -> return Nothing
+      considerEnPassant changes = if
+        isPawn (bd ! (y1, x1)) && isEmp (bd ! (y2, x2)) && x1 /= x2
+        then ((y1, x2), Emp):changes else changes
+      considerPromotion changes = case promote mv of
+        Nothing -> changes
+        Just p -> onHead (second . const $ HasP (gmTurn gm) p) changes
+  Castle p -> let
+    c = gmTurn gm
+    y = if c == CW then 8 else 1
+    xKf = 5
+    (xKt, xRf, xRt) = if p == 'K' then (7, 8, 6) else (3, 1, 4)
+    in doChanges [
+      ((y, xKf), Emp), ((y, xKt), HasP c 'K'),
+      ((y, xRf), Emp), ((y, xRt), HasP c 'R')
+      ]
+  _ -> Left "Unknown move type"
+  where
+  Bd bd = gmBd gm
+  doChanges changes = Right $ gm {
+    gmBd = Bd $ bd // changes,
+    gmTurn = if gmTurn gm == CW then CB else CW,
+    gmHist = gmHist gm ++ [mvStr]
+    }
+
+eithErr :: (Error e, Monad m) => Either e a -> ErrorT e m a
+eithErr = either throwError return
+
+compMv :: Game -> ErrorT String IO (String, Game)
+compMv gm = do
+  pRetLs <- io $ sendForReply gm ["go", "?"]
+  -- fixme: filter for right line or check for errors..
+  let compStr = last pRetLs
+  io . debugLog $ "COMPSTR: " ++ compStr
+  if "move " `isPrefixOf` compStr
+    then do
+      let
+        'm':'o':'v':'e':' ':compMvStr = compStr
+      compMv <- eithErr . resolveMv gm $ parseMv compMvStr
+      gm' <- eithErr $ doMvPure compMvStr compMv gm
+      return (compMvStr, gm')
+    else throwError "Could not determine computer move."
+
+andLog :: IO String -> IO String
+andLog f = do
+  y <- f
+  debugLog y
+  return y
+
+sendForReply :: Game -> [String] -> IO [String]
+sendForReply gm ls = do
+  let
+    Proc pIn pOut pErr pId = gmProc gm
+  -- todo: incrementing ping number?
+  hPutStr pIn . unlines $ ls ++ ["ping 1"]
+  hFlush pIn
+  init <$> untilCombM ((== ["pong 1"]) . take 1 . reverse) [] (\ ls -> do
+    l <- andLog $ hGetLine pOut
+    return $ ls ++ [l])
+
+doMv :: String -> Move -> Game -> ErrorT String IO Game
+doMv mvStr mv gm = do
+  pRetLs <- io $ sendForReply gm ["force", mvStr]
+  -- fixme: check for error
+  eithErr $ doMvPure mvStr mv gm
 
 onHead :: (a -> a) -> [a] -> [a]
 onHead f (x:xs) = (f x):xs
 
-mvsOn :: [Game] -> IO ()
-mvsOn gms = do
+doMvStr :: String -> Game -> ErrorT String IO Game
+doMvStr mvStr gm = do
+  mv <- eithErr . resolveMv gm $ parseMv mvStr
+  doMv mvStr mv gm
+
+doMvStrPure :: String -> Game -> ErrorT String IO Game
+doMvStrPure mvStr gm = do
+  mv <- eithErr . resolveMv gm $ parseMv mvStr
+  eithErr $ doMvPure mvStr mv gm
+
+mvsOn :: St -> [Game] -> IO ()
+mvsOn st gms = do
   let
     gm = head gms
-    wat mvStr = clrScr >> hPutStrLn stderr (show mvStr ++ "?") >> mvsOn gms
-    noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn gms
-    Proc pIn _ _ pId = gmProc gm
+    noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn st gms
+    Proc pIn pOut pErr pId = gmProc gm
   print $ gmBd gm
   mvStr <- getLine
   case mvStr of
@@ -343,36 +379,39 @@ mvsOn gms = do
       _ -> do
         clrScr
         putStrLn ""
-        --hPutStrLn pIn "force"
-        hPutStrLn pIn "undo"
-        hPutStrLn pIn "undo"
+        hPutStrLn pIn $ (if gmHumans gm == 1 then "remove" else "undo")
         hFlush pIn
-        mvsOn $ tail gms
+        mvsOn st $ tail gms
+    "2" -> mvsOn (st {stHumans = 2}) gms
+    "1" -> mvsOn (st {stHumans = 1}) gms
     "s" -> do
       writeFile "game.pgn" . unlines $ [
-          "[Event \"?\"]",
-          "[Site \"?\"]",
-          "[Date \"?\"]",
-          "[Round \"-\"]",
-          "[White \"danl\"]",
-          "[Black \"crafty\"]",
-          "[Result \"?\"]",
-          "",
-          interwords .
-          zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
-          splitN 2 $ gmHist gm]
-      mvsOn gms
-    _ -> case resolveMv gm $ parseMv mvStr of
-      Just mv -> do
-        gmMb <- doMv True mvStr mv gm
-        case gmMb of
-          Just gm' -> mvsOn (gm':gms)
-          Nothing -> wat mvStr
-      Nothing -> wat mvStr
+        "[Event \"?\"]",
+        "[Site \"?\"]",
+        "[Date \"?\"]",
+        "[Round \"-\"]",
+        "[White \"danl\"]",
+        "[Black \"crafty\"]",
+        "[Result \"?\"]",
+        "",
+        interwords .
+        zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
+        splitN 2 $ gmHist gm]
+      mvsOn st gms
+    _ -> do
+      clrScr
+      ret <- runErrorT $ if stHumans st == 1
+        then doMvStr mvStr gm >>= compMv
+        else doMvStr mvStr gm >>= \ gm' -> return (mvStr, gm')
+      case ret of
+        Right (mvStr, gm') -> putStrLn mvStr >> mvsOn st (gm':gms)
+        Left err -> hPutStrLn stderr (show mvStr ++ ": " ++ err) >>
+          mvsOn st gms
 
 main :: IO ()
 main = do
+  (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
   clrScr
   putStrLn ""
   gm <- initGm
-  mvsOn [gm]
+  mvsOn (St 1) [gm]

@@ -3,12 +3,13 @@
 module Test where
 
 import Data.Char
+import Data.Maybe
 import System.Random
 import Test.QuickCheck
 
-import Main 
+import Main
 
-newtype PawnDestRow = PawnDestRow {unPawnDestRow :: Char} deriving 
+newtype PawnDestRow = PawnDestRow {unPawnDestRow :: Char} deriving
   (Random, Show)
 newtype Col = Col {unCol :: Char} deriving (Random, Show)
 
@@ -20,7 +21,11 @@ instance Arbitrary Col where
   arbitrary = choose (Col 'a', Col 'h')
   coarbitrary c = variant . ord $ unCol c
 
-chkPawn :: Col -> PawnDestRow -> Bool
-chkPawn c r = gmBd (doMv [unCol c, unPawnDestRow r] initGm) /= gmBd initGm
+chkPawn :: Game -> Col -> PawnDestRow -> Bool
+chkPawn gm c r = fromMaybe False $ do
+  gm' <- doMvStrPure [unCol c, unPawnDestRow r] gm
+  return $ gmBd gm' /= gmBd gm
 
-qc = verboseCheck chkPawn
+runTests = do
+  gm <- initGm
+  verboseCheck $ chkPawn gm
