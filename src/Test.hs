@@ -22,7 +22,7 @@ instance Arbitrary Col where
   coarbitrary c = variant . ord $ unCol c
 
 chkPawn :: Game -> Col -> PawnDestRow -> Bool
-chkPawn gm c r = fromMaybe False $ do
+chkPawn gm c r = either (const False) id $ do
   gm' <- doMvStrPure [unCol c, unPawnDestRow r] gm
   return $ gmBd gm' /= gmBd gm
 

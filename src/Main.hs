@@ -357,10 +357,10 @@ doMvStr mvStr gm = do
   mv <- eithErr . resolveMv gm $ parseMv mvStr
   doMv mvStr mv gm
 
-doMvStrPure :: String -> Game -> ErrorT String IO Game
+doMvStrPure :: String -> Game -> Either String Game
 doMvStrPure mvStr gm = do
-  mv <- eithErr . resolveMv gm $ parseMv mvStr
-  eithErr $ doMvPure mvStr mv gm
+  mv <- resolveMv gm $ parseMv mvStr
+  doMvPure mvStr mv gm
 
 mvsOn :: St -> [Game] -> IO ()
 mvsOn st gms = do
