@@ -9,6 +9,7 @@ import Data.Char
 import Data.List
 import Data.Maybe
 import FUtil
+import HSH
 import System.Directory
 import System.Environment
 import System.IO
@@ -36,7 +37,8 @@ data Game = Game {
   gmCanCastle :: M.Map Color (S.Set Piece),
   gmProc :: Proc,
   gmHist :: [String],
-  gmHumans :: Int
+  gmHumans :: Int,
+  gmRes :: Maybe String
   }
 data St = St {
   stHumans :: Int
@@ -109,7 +111,8 @@ initGm = do
     gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
     gmProc = Proc pIn pOut pErr pId,
     gmHist = [],
-    gmHumans = 1
+    gmHumans = 1,
+    gmRes = Nothing
     }
 
 modRet :: (MonadState t1 t) => (t1 -> (t2, t1)) -> t t2
@@ -311,20 +314,35 @@ doMvPure mvStr mv gm = case mv of
 eithErr :: (Error e, Monad m) => Either e a -> ErrorT e m a
 eithErr = either throwError return
 
+tryRes :: [String] -> Game -> Game
+tryRes ls = head $ concatMap tryStr ["0-1", "1-0", "1/2-1/2"] ++ [id] where
+  tryStr s = map (\ _ -> setRes $ Just s) $ filter ((s ++ " ") `isPrefixOf`) ls
+  setRes res gm = gm {gmRes = res}
+
 compMv :: Game -> ErrorT String IO (String, Game)
 compMv gm = do
   pRetLs <- io $ sendForReply gm ["go", "?"]
-  -- fixme: filter for right line or check for errors..
-  let compStr = last pRetLs
-  io . debugLog $ "COMPSTR: " ++ compStr
-  if "move " `isPrefixOf` compStr
-    then do
-      let
-        'm':'o':'v':'e':' ':compMvStr = compStr
-      compMv <- eithErr . resolveMv gm $ parseMv compMvStr
-      gm' <- eithErr $ doMvPure compMvStr compMv gm
-      return (compMvStr, gm')
-    else throwError "Could not determine computer move."
+  let
+    moves = filter ("move " `isPrefixOf`) pRetLs
+    gm' = tryRes pRetLs gm
+  -- fixme: check for more errors?
+  when (null moves && isNothing (gmRes gm')) $ throwError "No comp move.."
+  when (length moves > 1) $ throwError "Multiple comp moves?"
+  case moves of
+    [compStr] -> do
+      io . debugLog $ "COMPSTR: " ++ compStr
+      if "move " `isPrefixOf` compStr
+        then do
+          let
+            'm':'o':'v':'e':' ':compMvStr = compStr
+          compMv <- eithErr . resolveMv gm' $ parseMv compMvStr
+          gm'' <- eithErr $ doMvPure compMvStr compMv gm'
+          return (compMvStr, tryRes pRetLs gm'')
+        else throwError "Could not determine computer move."
+    _ ->
+      -- gmHumans = 2 bc there was no computer move, so this turn must be
+      -- considered only as one ply or undo will un-synchronize with engine.
+      return ("", gm' {gmHumans = 2})
 
 andLog :: IO String -> IO String
 andLog f = do
@@ -347,6 +365,9 @@ doMv :: String -> Move -> Game -> ErrorT String IO Game
 doMv mvStr mv gm = do
   pRetLs <- io $ sendForReply gm ["force", mvStr]
   -- fixme: check for error
+  let
+    errs = filter ("Illegal move" `isPrefixOf`) pRetLs
+  unless (null errs) . throwError $ head errs
   eithErr $ doMvPure mvStr mv gm
 
 onHead :: (a -> a) -> [a] -> [a]
@@ -361,6 +382,23 @@ doMvStrPure :: String -> Game -> Either String Game
 doMvStrPure mvStr gm = do
   mv <- resolveMv gm $ parseMv mvStr
   doMvPure mvStr mv gm
+
+saveGm :: Game -> IO ()
+saveGm gm = do
+  host <- runSL "hostname"
+  date <- runSL "date"
+  writeFile "game.pgn" . unlines $ [
+    "[Event \"-\"]",
+    "[Site \"" ++ host ++ "\"]",
+    "[Date \"" ++ date ++ "\"]",
+    "[Round \"-\"]",
+    "[White \"danl\"]",
+    "[Black \"crafty\"]",
+    "[Result \"" ++ fromMaybe "*" (gmRes gm) ++ "\"]",
+    "",
+    interwords .
+    zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
+    splitN 2 $ gmHist gm]
 
 mvsOn :: St -> [Game] -> IO ()
 mvsOn st gms = do
@@ -381,31 +419,22 @@ mvsOn st gms = do
         putStrLn ""
         hPutStrLn pIn $ (if gmHumans gm == 1 then "remove" else "undo")
         hFlush pIn
+        saveGm gm
         mvsOn st $ tail gms
     "2" -> mvsOn (st {stHumans = 2}) gms
     "1" -> mvsOn (st {stHumans = 1}) gms
-    "s" -> do
-      writeFile "game.pgn" . unlines $ [
-        "[Event \"?\"]",
-        "[Site \"?\"]",
-        "[Date \"?\"]",
-        "[Round \"-\"]",
-        "[White \"danl\"]",
-        "[Black \"crafty\"]",
-        "[Result \"?\"]",
-        "",
-        interwords .
-        zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
-        splitN 2 $ gmHist gm]
-      mvsOn st gms
     _ -> do
       clrScr
       ret <- runErrorT $ if stHumans st == 1
         then doMvStr mvStr gm >>= compMv
         else doMvStr mvStr gm >>= \ gm' -> return (mvStr, gm')
       case ret of
-        Right (mvStr, gm') -> putStrLn mvStr >> mvsOn st (gm':gms)
-        Left err -> hPutStrLn stderr (show mvStr ++ ": " ++ err) >>
+        Right (mvStr, gm') -> do
+          putStrLn $ mvStr ++ maybe "" (" " ++) (gmRes gm)
+          saveGm gm'
+          mvsOn st (gm':gms)
+        Left err -> do
+          hPutStrLn stderr (show mvStr ++ ": " ++ err)
           mvsOn st gms
 
 main :: IO ()

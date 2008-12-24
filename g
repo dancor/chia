@@ -6,4 +6,3 @@ rm test
 hsb
 cd ~/g/ch/chia
 big chia
-./anal

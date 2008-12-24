@@ -5,7 +5,7 @@ license-file:   LICENSE
 author:         dan corson <danl@alum.mit.edu>
 synopsis:       <syn>
 build-type:     Simple
-build-depends:  FUtil, array, base, containers, directory, mtl, process
+build-depends:  FUtil, HSH, array, base, containers, directory, mtl, process
 
 executable:     chia
 main-is:        Main.hs
