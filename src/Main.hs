@@ -10,6 +10,7 @@ import Data.List
 import Data.Maybe
 import FUtil
 import HSH
+import System.Console.GetOpt
 import System.Directory
 import System.Environment
 import System.IO
@@ -20,9 +21,9 @@ import qualified Data.Set as S
 
 chProg :: [Char]
 chProg = "crafty"
-bdW :: Int
+
+bdW, bdH :: Int
 bdW = 8
-bdH :: Int
 bdH = 8
 
 data Color = CW | CB deriving (Eq, Ord)
@@ -38,7 +39,8 @@ data Game = Game {
   gmProc :: Proc,
   gmHist :: [String],
   gmHumans :: Int,
-  gmRes :: Maybe String
+  gmRes :: Maybe String,
+  gmSkill :: Int
   }
 data St = St {
   stHumans :: Int
@@ -90,8 +92,23 @@ instance Show Bd where
     in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) .
     splitN bdW . map showAlt . assocs) bd ++ AC.normal
 
-initGm :: IO Game
-initGm = do
+data Options = Options {
+  optSkill :: Int
+}
+
+defOpts :: Options
+defOpts = Options {
+  optSkill = 100
+}
+
+options :: [OptDescr (Options -> Options)]
+options = [
+  Option "s" ["skill"] (ReqArg (\ a o -> o {optSkill = read a}) "N")
+    "1..100"
+  ]
+
+initGm :: Options -> IO Game
+initGm opts = do
   let
     backrow = "RNBQKBNR"
     frontrow = replicate bdW 'P'
@@ -102,7 +119,7 @@ initGm = do
   hPutStrLn pIn "xboard"
   hPutStrLn pIn "st 0.1"
   hPutStrLn pIn "easy"
-  hPutStrLn pIn "skill 50"
+  hPutStrLn pIn $ "skill " ++ show (optSkill opts)
   hFlush pIn
   return $ Game {
     gmBd = Bd $ listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
@@ -112,7 +129,8 @@ initGm = do
     gmProc = Proc pIn pOut pErr pId,
     gmHist = [],
     gmHumans = 1,
-    gmRes = Nothing
+    gmRes = Nothing,
+    gmSkill = optSkill opts
     }
 
 modRet :: (MonadState t1 t) => (t1 -> (t2, t1)) -> t t2
@@ -393,7 +411,7 @@ saveGm gm = do
     "[Date \"" ++ date ++ "\"]",
     "[Round \"-\"]",
     "[White \"danl\"]",
-    "[Black \"crafty\"]",
+    "[Black \"crafty skill " ++ show (gmSkill gm) ++ "\"]",
     "[Result \"" ++ fromMaybe "*" (gmRes gm) ++ "\"]",
     "",
     interwords .
@@ -439,8 +457,10 @@ mvsOn st gms = do
 
 main :: IO ()
 main = do
+  (opts, args) <- doArgs "usage" defOpts options
+  let [] = args
   (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
   clrScr
   putStrLn ""
-  gm <- initGm
+  gm <- initGm opts
   mvsOn (St 1) [gm]
