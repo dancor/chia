@@ -18,6 +18,7 @@ import System.Process
 import qualified AnsiColor as AC
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.PomTree as PMT
 
 chProg :: [Char]
 chProg = "crafty"
@@ -37,7 +38,9 @@ data Game = Game {
   gmLastPawn2 :: Maybe Pt,
   gmCanCastle :: M.Map Color (S.Set Piece),
   gmProc :: Proc,
-  gmHist :: [String],
+  -- should be Move not String? but i didn't want to write move -> string for
+  -- pgn writing eh
+  gmHist :: PMT.PomTree String,
   gmHumans :: Int,
   gmRes :: Maybe String,
   gmSkill :: Int
@@ -53,7 +56,8 @@ data Move = Move {
   toX :: Maybe Int,
   toY :: Maybe Int,
   promote :: Maybe Piece
-  } | Castle Piece deriving Show
+  } | Castle Piece
+  deriving (Show, Ord, Eq)
 data Proc = Proc {
   prIn :: Handle,
   prOut :: Handle,
@@ -127,7 +131,7 @@ initGm opts = do
     gmLastPawn2 = Nothing,
     gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
     gmProc = Proc pIn pOut pErr pId,
-    gmHist = [],
+    gmHist = PMT.empty,
     gmHumans = 1,
     gmRes = Nothing,
     gmSkill = optSkill opts
@@ -326,7 +330,7 @@ doMvPure mvStr mv gm = case mv of
   doChanges changes = Right $ gm {
     gmBd = Bd $ bd // changes,
     gmTurn = if gmTurn gm == CW then CB else CW,
-    gmHist = gmHist gm ++ [mvStr]
+    gmHist = PMT.descAdd mvStr $ gmHist gm
     }
 
 eithErr :: (Error e, Monad m) => Either e a -> ErrorT e m a
@@ -416,13 +420,14 @@ saveGm gm = do
     "",
     interwords .
     zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
-    splitN 2 $ gmHist gm]
+    -- todo?: branching history into pgn
+    splitN 2 . PMT.getPath $ gmHist gm]
 
-mvsOn :: St -> [Game] -> IO ()
-mvsOn st gms = do
+playGame :: St -> [Game] -> IO ()
+playGame st gms = do
   let
     gm = head gms
-    noUndo = hPutStrLn stderr "Nothing to undo." >> mvsOn st gms
+    noUndo = hPutStrLn stderr "Nothing to undo." >> playGame st gms
     Proc pIn pOut pErr pId = gmProc gm
   print $ gmBd gm
   mvStr <- getLine
@@ -438,9 +443,9 @@ mvsOn st gms = do
         hPutStrLn pIn $ (if gmHumans gm == 1 then "remove" else "undo")
         hFlush pIn
         saveGm gm
-        mvsOn st $ tail gms
-    "2" -> mvsOn (st {stHumans = 2}) gms
-    "1" -> mvsOn (st {stHumans = 1}) gms
+        playGame st $ tail gms
+    "2" -> playGame (st {stHumans = 2}) gms
+    "1" -> playGame (st {stHumans = 1}) gms
     _ -> do
       clrScr
       ret <- runErrorT $ if stHumans st == 1
@@ -450,10 +455,10 @@ mvsOn st gms = do
         Right (mvStr, gm') -> do
           putStrLn $ mvStr ++ maybe "" (" " ++) (gmRes gm)
           saveGm gm'
-          mvsOn st (gm':gms)
+          playGame st (gm':gms)
         Left err -> do
           hPutStrLn stderr (show mvStr ++ ": " ++ err)
-          mvsOn st gms
+          playGame st gms
 
 main :: IO ()
 main = do
@@ -463,4 +468,4 @@ main = do
   clrScr
   putStrLn ""
   gm <- initGm opts
-  mvsOn (St 1) [gm]
+  playGame (St 1) [gm]
