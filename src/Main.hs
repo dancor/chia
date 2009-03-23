@@ -392,9 +392,6 @@ doMv mvStr mv gm = do
   unless (null errs) . throwError $ head errs
   eithErr $ doMvPure mvStr mv gm
 
-onHead :: (a -> a) -> [a] -> [a]
-onHead f (x:xs) = (f x):xs
-
 doMvStr :: String -> Game -> ErrorT String IO Game
 doMvStr mvStr gm = do
   mv <- eithErr . resolveMv gm $ parseMv mvStr
