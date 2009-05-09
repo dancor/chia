@@ -15,11 +15,11 @@ newtype Col = Col {unCol :: Char} deriving (Random, Show)
 
 instance Arbitrary PawnDestRow where
   arbitrary = choose (PawnDestRow '3', PawnDestRow '4')
-  coarbitrary c = variant . ord $ unPawnDestRow c
+  --coarbitrary c = variant . ord $ unPawnDestRow c
 
 instance Arbitrary Col where
   arbitrary = choose (Col 'a', Col 'h')
-  coarbitrary c = variant . ord $ unCol c
+  --coarbitrary c = variant . ord $ unCol c
 
 chkPawn :: Game -> Col -> PawnDestRow -> Bool
 chkPawn gm c r = either (const False) id $ do
@@ -28,4 +28,5 @@ chkPawn gm c r = either (const False) id $ do
 
 runTests = do
   gm <- initGm
-  verboseCheck $ chkPawn gm
+  quickCheck $ chkPawn gm
+  --verboseCheck $ chkPawn gm
