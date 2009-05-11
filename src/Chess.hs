@@ -17,8 +17,8 @@ data Move = Move {
   fromX :: Maybe Int,
   fromY :: Maybe Int,
   isATake :: Bool,
-  toX :: Maybe Int,
-  toY :: Maybe Int,
+  toX :: Int,
+  toY :: Int,
   promote :: Maybe Piece
   } | Castle Piece
   deriving (Show, Ord, Eq)
@@ -82,38 +82,40 @@ parseMv mvStr = case mvStr of
       if s1 `elem` chs then (Just s1, sRest) else (Nothing, s)
     in flip evalState (filter (`elem` pChs ++ xChs ++ yChs ++ "x") mvStr) $ do
       fromP <- modRet (tryFrom pChs)
-      x1 <- (parseX <$>) <$> modRet (tryFrom xChs)
-      y1 <- (parseY <$>) <$> modRet (tryFrom yChs)
+      x1Mb <- (parseX <$>) <$> modRet (tryFrom xChs)
+      y1Mb <- (parseY <$>) <$> modRet (tryFrom yChs)
       isATake <- isJust <$> modRet (tryFrom "x")
       -- could be more strict
       modRet (tryFrom "=")
       promote <- modRet (tryFrom pChs)
       g <- get
-      if null g && not isATake
-        then do
-          return $ Move {
-            fromP = fromP,
-            fromX = Nothing,
-            fromY = Nothing,
-            isATake = isATake,
-            toX = x1,
-            toY = y1,
-            promote = promote
-            }
-        else do
-          x2 <- (parseX <$>) <$> modRet (tryFrom xChs)
-          y2 <- (parseY <$>) <$> modRet (tryFrom yChs)
-          modRet (tryFrom "=")
-          promote <- modRet (tryFrom pChs)
-          return $ Move {
-            fromP = fromP,
-            fromX = x1,
-            fromY = y1,
-            isATake = isATake,
-            toX = x2,
-            toY = y2,
-            promote = promote
-            }
+      case (g, isATake, x1Mb, y1Mb) of
+        ([], False, Just x1, Just y1) -> return $ Move {
+          fromP = fromP,
+          fromX = Nothing,
+          fromY = Nothing,
+          isATake = isATake,
+          toX = x1,
+          toY = y1,
+          promote = promote
+          }
+        _ -> do
+          x2Mb <- (parseX <$>) <$> modRet (tryFrom xChs)
+          y2Mb <- (parseY <$>) <$> modRet (tryFrom yChs)
+          case (x2Mb, y2Mb) of
+            (Just x2, Just y2) -> do
+              modRet (tryFrom "=")
+              promote <- modRet (tryFrom pChs)
+              return $ Move {
+                fromP = fromP,
+                fromX = x1Mb,
+                fromY = y1Mb,
+                isATake = isATake,
+                toX = x2,
+                toY = y2,
+                promote = promote
+                }
+            _ -> error "could not parse move"
 
 onBoard :: (Int, Int) -> Bool
 onBoard (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
@@ -171,19 +173,16 @@ resolveMv bd mv0 = let
       Just y -> x == y
       Nothing -> True
     in if turn == bdTurn bd &&
-      eqOrN x fromX && eqOrN y fromY && p == fromJust (fromP mv) &&
-      (fromJust $ toY mv, fromJust $ toX mv) `elem`
-      sqCanGetTo (y, x) bd (isATake mv)
+          eqOrN x fromX && eqOrN y fromY && p == fromJust (fromP mv) &&
+          (toY mv, toX mv) `elem` sqCanGetTo (y, x) bd (isATake mv)
       then mv {fromX = Just x, fromY = Just y}
       else mv
   tryXY _ mv = mv
   in case mv0 of
-    Move {toX = Just _, toY = Just _} -> Right $
-      if isJust (fromX mv0) && isJust (fromY mv0)
-        then mv0
-        else foldr tryXY (fillP mv0) . assocs $ bdGrid bd
     Castle _ -> Right mv0
-    _ -> Left "Could not resolve move"
+    _ -> Right $ if isJust (fromX mv0) && isJust (fromY mv0)
+      then mv0
+      else foldr tryXY (fillP mv0) . assocs $ bdGrid bd
 
 isPawn :: BdSq -> Bool
 isPawn (HasP _ 'P') = True
@@ -191,7 +190,7 @@ isPawn _ = False
 
 bdDoMv :: Move -> Board -> Board
 bdDoMv mv bd = case mv of
-  Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} ->
+  Move {fromX = Just x1, fromY = Just y1, toX = x2, toY = y2} ->
     doChanges . considerEnPassant $ considerPromotion changes where
       changes = [
         ((y2, x2), grid ! (y1, x1)),
