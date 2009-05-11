@@ -9,6 +9,7 @@ import Data.Array
 import Data.Char
 import Data.List
 import Data.Maybe
+import Data.SAN
 import FUtil
 import HSH
 import System.Console.GetOpt

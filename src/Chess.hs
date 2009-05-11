@@ -7,26 +7,15 @@ import Data.Array
 import Data.Char
 import Data.List
 import Data.Maybe
+import Data.SAN
 import FUtil
+import Text.Parsec
 import qualified Data.Map as M
 import qualified Data.PomTree as Pom
 import qualified Data.Set as S
 
-data Move = Move {
-  mvPiece :: Maybe Piece,
-  mvFromX :: Maybe Int,
-  mvFromY :: Maybe Int,
-  mvIsACapture :: Bool,
-  mvToX :: Int,
-  mvToY :: Int,
-  mvPromote :: Maybe Piece
-  } | Castle Piece
-  deriving (Show, Ord, Eq)
-
 data Color = CW | CB
   deriving (Eq, Ord)
-
-type Piece = Char
 
 data BdSq = Emp | HasP Color Piece
   deriving (Eq)
@@ -68,54 +57,9 @@ modRet f = do
   return x
 
 parseMv :: String -> Move
-parseMv mvStr = case mvStr of
-  "O-O" -> Castle 'K'
-  "O-O-O" -> Castle 'Q'
-  _ -> let
-    pChs = "RNBQKP"
-    xChs = "abcdefgh"
-    yChs = "12345678"
-    parseX x = ord x - ord 'a' + 1
-    parseY y = read [y]
-    tryFrom :: String -> String -> (Maybe Char, String)
-    tryFrom chs s = if null s then (Nothing, s) else let s1:sRest = s in
-      if s1 `elem` chs then (Just s1, sRest) else (Nothing, s)
-    in flip evalState (filter (`elem` pChs ++ xChs ++ yChs ++ "x") mvStr) $ do
-      mvPiece <- modRet (tryFrom pChs)
-      x1Mb <- (parseX <$>) <$> modRet (tryFrom xChs)
-      y1Mb <- (parseY <$>) <$> modRet (tryFrom yChs)
-      isCap <- isJust <$> modRet (tryFrom "x")
-      -- could be more strict
-      modRet (tryFrom "=")
-      mvPromote <- modRet (tryFrom pChs)
-      g <- get
-      case (g, isCap, x1Mb, y1Mb) of
-        ([], False, Just x1, Just y1) -> return $ Move {
-          mvPiece = mvPiece,
-          mvFromX = Nothing,
-          mvFromY = Nothing,
-          mvIsACapture = isCap,
-          mvToX = x1,
-          mvToY = y1,
-          mvPromote = mvPromote
-          }
-        _ -> do
-          x2Mb <- (parseX <$>) <$> modRet (tryFrom xChs)
-          y2Mb <- (parseY <$>) <$> modRet (tryFrom yChs)
-          case (x2Mb, y2Mb) of
-            (Just x2, Just y2) -> do
-              modRet (tryFrom "=")
-              mvPromote <- modRet (tryFrom pChs)
-              return $ Move {
-                mvPiece = mvPiece,
-                mvFromX = x1Mb,
-                mvFromY = y1Mb,
-                mvIsACapture = isCap,
-                mvToX = x2,
-                mvToY = y2,
-                mvPromote = mvPromote
-                }
-            _ -> error "could not parse move"
+parseMv mvStr = case runParser moveAnnParser () "" mvStr of
+  Left err -> error $ "could not parse move " ++ show mvStr ++ ": " ++ show err
+  Right (mv, _) -> mv
 
 onBoard :: (Int, Int) -> Bool
 onBoard (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
