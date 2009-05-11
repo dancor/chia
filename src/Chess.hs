@@ -206,7 +206,7 @@ bdDoMv mv bd = case mv of
         Just p -> onHead (second . const $ HasP turn p) changes
   Castle p -> let
     -- todo: doesn't check can-castle
-    y = if turn == CW then 8 else 1
+    y = if turn == CW then 1 else 8
     xKf = 5
     (xKt, xRf, xRt) = if p == 'K' then (7, 8, 6) else (3, 1, 4)
     in doChanges [
