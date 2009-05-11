@@ -13,13 +13,13 @@ import qualified Data.PomTree as Pom
 import qualified Data.Set as S
 
 data Move = Move {
-  fromP :: Maybe Piece,
-  fromX :: Maybe Int,
-  fromY :: Maybe Int,
-  isATake :: Bool,
-  toX :: Int,
-  toY :: Int,
-  promote :: Maybe Piece
+  mvPiece :: Maybe Piece,
+  mvFromX :: Maybe Int,
+  mvFromY :: Maybe Int,
+  mvIsACapture :: Bool,
+  mvToX :: Int,
+  mvToY :: Int,
+  mvPromote :: Maybe Piece
   } | Castle Piece
   deriving (Show, Ord, Eq)
 
@@ -81,23 +81,23 @@ parseMv mvStr = case mvStr of
     tryFrom chs s = if null s then (Nothing, s) else let s1:sRest = s in
       if s1 `elem` chs then (Just s1, sRest) else (Nothing, s)
     in flip evalState (filter (`elem` pChs ++ xChs ++ yChs ++ "x") mvStr) $ do
-      fromP <- modRet (tryFrom pChs)
+      mvPiece <- modRet (tryFrom pChs)
       x1Mb <- (parseX <$>) <$> modRet (tryFrom xChs)
       y1Mb <- (parseY <$>) <$> modRet (tryFrom yChs)
-      isATake <- isJust <$> modRet (tryFrom "x")
+      isCap <- isJust <$> modRet (tryFrom "x")
       -- could be more strict
       modRet (tryFrom "=")
-      promote <- modRet (tryFrom pChs)
+      mvPromote <- modRet (tryFrom pChs)
       g <- get
-      case (g, isATake, x1Mb, y1Mb) of
+      case (g, isCap, x1Mb, y1Mb) of
         ([], False, Just x1, Just y1) -> return $ Move {
-          fromP = fromP,
-          fromX = Nothing,
-          fromY = Nothing,
-          isATake = isATake,
-          toX = x1,
-          toY = y1,
-          promote = promote
+          mvPiece = mvPiece,
+          mvFromX = Nothing,
+          mvFromY = Nothing,
+          mvIsACapture = isCap,
+          mvToX = x1,
+          mvToY = y1,
+          mvPromote = mvPromote
           }
         _ -> do
           x2Mb <- (parseX <$>) <$> modRet (tryFrom xChs)
@@ -105,15 +105,15 @@ parseMv mvStr = case mvStr of
           case (x2Mb, y2Mb) of
             (Just x2, Just y2) -> do
               modRet (tryFrom "=")
-              promote <- modRet (tryFrom pChs)
+              mvPromote <- modRet (tryFrom pChs)
               return $ Move {
-                fromP = fromP,
-                fromX = x1Mb,
-                fromY = y1Mb,
-                isATake = isATake,
-                toX = x2,
-                toY = y2,
-                promote = promote
+                mvPiece = mvPiece,
+                mvFromX = x1Mb,
+                mvFromY = y1Mb,
+                mvIsACapture = isCap,
+                mvToX = x2,
+                mvToY = y2,
+                mvPromote = mvPromote
                 }
             _ -> error "could not parse move"
 
@@ -125,7 +125,7 @@ onBoard (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
 -- todo: We _do_ have to worry about exposed check for disambig unfortunately.
 --       (but extremely rarely; I think crafty/xboard fuck this up actually!)
 sqCanGetTo :: (Int, Int) -> Board -> Bool -> [(Int, Int)]
-sqCanGetTo (y, x) bd isATake = let
+sqCanGetTo (y, x) bd isCap = let
   HasP turn p = bdGrid bd ! (y, x)
   tryDir = tryDirPos (y, x)
   tryDirPos _ _ 0 dir = []
@@ -141,9 +141,9 @@ sqCanGetTo (y, x) bd isATake = let
       7 -> (yPos - 1, xPos + 1)
     in if onBoard pos'
       then case bdGrid bd ! pos' of
-        Emp -> (if isATake && not takeAll then id else (pos':)) $
+        Emp -> (if isCap && not takeAll then id else (pos':)) $
           tryDirPos pos' takeAll (dist - 1) dir
-        _ -> if isATake then [pos'] else []
+        _ -> if isCap then [pos'] else []
       else []
   in case p of
     'K' -> concatMap (tryDir False 1) [0..7]
@@ -153,7 +153,7 @@ sqCanGetTo (y, x) bd isATake = let
     'N' -> filter onBoard $
       [(y + oy, x + ox) | oy <- [-2, 2], ox <- [-1, 1]] ++
       [(y + oy, x + ox) | oy <- [-1, 1], ox <- [-2, 2]]
-    'P' -> if isATake
+    'P' -> if isCap
       then concatMap (tryDir True 1) (if turn == CW then [1, 3] else [5, 7])
       else tryDir False 2 (if turn == CW then 2 else 6)
 
@@ -163,9 +163,9 @@ sqCanGetTo (y, x) bd isATake = let
 resolveMv :: Board -> Move -> Either String Move
 resolveMv bd mv0 = let
   -- when start spot is omitted, we will know the piece
-  fillP mv = case fromP mv of
+  fillP mv = case mvPiece mv of
     Just _ -> mv
-    Nothing -> mv {fromP = Just 'P'}
+    Nothing -> mv {mvPiece = Just 'P'}
 
   tryXY :: ((Int, Int), BdSq) -> Move -> Move
   tryXY ((y, x), HasP turn p) mv = let
@@ -173,14 +173,14 @@ resolveMv bd mv0 = let
       Just y -> x == y
       Nothing -> True
     in if turn == bdTurn bd &&
-          eqOrN x fromX && eqOrN y fromY && p == fromJust (fromP mv) &&
-          (toY mv, toX mv) `elem` sqCanGetTo (y, x) bd (isATake mv)
-      then mv {fromX = Just x, fromY = Just y}
+          eqOrN x mvFromX && eqOrN y mvFromY && p == fromJust (mvPiece mv) &&
+          (mvToY mv, mvToX mv) `elem` sqCanGetTo (y, x) bd (mvIsACapture mv)
+      then mv {mvFromX = Just x, mvFromY = Just y}
       else mv
   tryXY _ mv = mv
   in case mv0 of
     Castle _ -> Right mv0
-    _ -> Right $ if isJust (fromX mv0) && isJust (fromY mv0)
+    _ -> Right $ if isJust (mvFromX mv0) && isJust (mvFromY mv0)
       then mv0
       else foldr tryXY (fillP mv0) . assocs $ bdGrid bd
 
@@ -190,7 +190,7 @@ isPawn _ = False
 
 bdDoMv :: Move -> Board -> Board
 bdDoMv mv bd = case mv of
-  Move {fromX = Just x1, fromY = Just y1, toX = x2, toY = y2} ->
+  Move {mvFromX = Just x1, mvFromY = Just y1, mvToX = x2, mvToY = y2} ->
     doChanges . considerEnPassant $ considerPromotion changes where
       changes = [
         ((y2, x2), grid ! (y1, x1)),
@@ -200,7 +200,7 @@ bdDoMv mv bd = case mv of
       considerEnPassant changes = if
         isPawn (grid ! (y1, x1)) && grid ! (y2, x2) == Emp && x1 /= x2
         then ((y1, x2), Emp):changes else changes
-      considerPromotion changes = case promote mv of
+      considerPromotion changes = case mvPromote mv of
         Nothing -> changes
         Just p -> onHead (second . const $ HasP turn p) changes
   Castle p -> let
