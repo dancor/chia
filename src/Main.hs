@@ -5,7 +5,6 @@ import Chess
 import Control.Applicative
 import Control.Arrow
 import Control.Monad.Error
-import Control.Monad.State
 import Data.Array
 import Data.Char
 import Data.List
@@ -18,20 +17,22 @@ import System.Environment
 import System.IO
 import System.Process
 import qualified AnsiColor as AC
-import qualified Data.Map as M
-import qualified Data.Set as S
-import qualified Data.PomTree as PMT
+import qualified Data.PomTree as Pom
 
-{-
+data St = St {
+  stHumans :: Int
+  }
+
+data Options = Options {
+  optSkill :: Int
+}
+
 data Game = Game {
-  gmBd :: Bd,
-  gmTurn :: Color,
-  gmLastPawn2 :: Maybe Pt,
-  gmCanCastle :: M.Map Color (S.Set Piece),
   gmProc :: Proc,
-  -- should be Move not String? but i didn't want to write move -> string for
-  -- pgn writing eh
-  gmHist :: PMT.PomTree String,
+  -- we could not save the move strings if we wrote move -> string and didn't
+  -- care about allowing variation (presumably there is one best way to write
+  -- each move that we'd be able to figure out?)
+  gmHist :: Pom.PomTree (Move, String),
   gmHumans :: Int,
   gmRes :: Maybe String,
   gmSkill :: Int
@@ -43,15 +44,6 @@ data Proc = Proc {
   prErr :: Handle,
   prId :: ProcessHandle
   }
--}
-
-data St = St {
-  stHumans :: Int
-  }
-
-data Options = Options {
-  optSkill :: Int
-}
 
 instance Show BdSq where
   show Emp = " "
@@ -72,17 +64,16 @@ instance Show BdSq where
   --show (HasP CB 'P') = toUtf "♙"
   show (HasP CB 'P') = toUtf "▵"
 
-instance Show Bd where
-  show (Bd bd) = let
-    showAlt ((i, j), p) = if (i + j) `mod` 2 == 0
-      then AC.whiteBg ++ AC.black ++ case p of
-        Emp -> show p
-        HasP CW c -> show $ HasP CB c
-        HasP CB c -> show $ HasP CW c
-      else AC.blackBg ++ AC.white ++ show p
-    stopWeirdWhiteLinesInTermSometimes = (++ AC.blackBg)
-    in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) .
-    splitN bdW . map showAlt . assocs) bd ++ AC.normal
+showBdGrid grid = let
+  showAlt ((i, j), p) = if (i + j) `mod` 2 == 0
+    then AC.whiteBg ++ AC.black ++ case p of
+      Emp -> show p
+      HasP CW c -> show $ HasP CB c
+      HasP CB c -> show $ HasP CW c
+    else AC.blackBg ++ AC.white ++ show p
+  stopWeirdWhiteLinesInTermSometimes = (++ AC.blackBg)
+  in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) .
+  splitN bdW . map showAlt . assocs) grid ++ AC.normal
 
 chProg :: [Char]
 chProg = "crafty"
@@ -100,12 +91,6 @@ options = [
 
 initGm :: Options -> IO Game
 initGm opts = do
-  let
-    backrow = "RNBQKBNR"
-    frontrow = replicate bdW 'P'
-    b = map (HasP CB) $ backrow ++ frontrow
-    empzone = replicate (bdW * (bdH - 4)) Emp
-    w = map (HasP CW) $ frontrow ++ backrow
   (pIn, pOut, pErr, pId) <- runInteractiveProcess chProg [] Nothing Nothing
   hPutStrLn pIn "xboard"
   hPutStrLn pIn "st 0.1"
@@ -113,16 +98,20 @@ initGm opts = do
   hPutStrLn pIn $ "skill " ++ show (optSkill opts)
   hFlush pIn
   return $ Game {
-    gmBd = Bd $ listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
-    gmTurn = CW,
-    gmLastPawn2 = Nothing,
-    gmCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
     gmProc = Proc pIn pOut pErr pId,
-    gmHist = PMT.empty,
+    gmHist = Pom.empty,
     gmHumans = 1,
     gmRes = Nothing,
     gmSkill = optSkill opts
     }
+
+gmBd :: Game -> Bd
+gmBd = foldl' (flip bdDoMv) bdInit . map fst . Pom.getPath . gmHist
+
+gmTurn :: Game -> Color
+gmTurn gm = case mod 2 . length . Pom.getPath $ gmHist gm of
+  0 -> CW
+  1 -> CB
 
 untilM :: (Monad t) => (t1 -> Bool) -> t t1 -> t t1
 untilM t f = f >>= \ y -> if t y then return y else untilM t f
@@ -170,10 +159,9 @@ compMv gm = do
       io . debugLog $ "COMPSTR: " ++ compStr
       if "move " `isPrefixOf` compStr
         then do
-          let
-            'm':'o':'v':'e':' ':compMvStr = compStr
-          compMv <- eithErr . resolveMv gm' $ parseMv compMvStr
-          gm'' <- eithErr $ doMvPure compMvStr compMv gm'
+          let 'm':'o':'v':'e':' ':compMvStr = compStr
+          compMv <- eithErr . resolveMv (gmBd gm') $ parseMv compMvStr
+          let gm'' = doMvPure compMvStr compMv gm'
           return (compMvStr, tryRes pRetLs gm'')
         else throwError "Could not determine computer move."
     _ ->
@@ -205,11 +193,14 @@ doMv mvStr mv gm = do
   let
     errs = filter ("Illegal move" `isPrefixOf`) pRetLs
   unless (null errs) . throwError $ head errs
-  eithErr $ doMvPure mvStr mv gm
+  return $ doMvPure mvStr mv gm
+
+doMvPure :: String -> Move -> Game -> Game
+doMvPure mvStr mv gm = gm {gmHist = Pom.descAdd (mv, mvStr) $ gmHist gm}
 
 doMvStr :: String -> Game -> ErrorT String IO Game
 doMvStr mvStr gm = do
-  mv <- eithErr . resolveMv gm $ parseMv mvStr
+  mv <- eithErr . resolveMv (gmBd gm) $ parseMv mvStr
   doMv mvStr mv gm
 
 saveGm :: Game -> IO ()
@@ -228,7 +219,7 @@ saveGm gm = do
     interwords .
     zipWith (\ n l -> show n ++ ". " ++ interwords l) [1..] .
     -- todo?: branching history into pgn
-    splitN 2 . PMT.getPath $ gmHist gm]
+    splitN 2 . map snd . Pom.getPath $ gmHist gm]
 
 playGame :: St -> [Game] -> IO ()
 playGame st gms = do
@@ -236,7 +227,7 @@ playGame st gms = do
     gm = head gms
     noUndo = hPutStrLn stderr "Nothing to undo." >> playGame st gms
     Proc pIn pOut pErr pId = gmProc gm
-  print $ gmBd gm
+  putStrLn . showBdGrid . bdGrid $ gmBd gm
   mvStr <- getLine
   case mvStr of
     "q" -> terminateProcess pId >> return ()

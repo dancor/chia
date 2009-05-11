@@ -2,44 +2,15 @@ module Chess where
 
 import Control.Applicative
 import Control.Arrow
-import Control.Monad.Error
 import Control.Monad.State
 import Data.Array
 import Data.Char
 import Data.List
 import Data.Maybe
 import FUtil
-import HSH
-import System.Console.GetOpt
-import System.Directory
-import System.Environment
-import System.IO
-import System.Process
-import qualified AnsiColor as AC
 import qualified Data.Map as M
+import qualified Data.PomTree as Pom
 import qualified Data.Set as S
-import qualified Data.PomTree as PMT
-
--- todo: remove this
-data Game = Game {
-  gmBd :: Bd,
-  gmTurn :: Color,
-  gmLastPawn2 :: Maybe Pt,
-  gmCanCastle :: M.Map Color (S.Set Piece),
-  gmProc :: Proc,
-  -- should be Move not String? but i didn't want to write move -> string for
-  -- pgn writing eh
-  gmHist :: PMT.PomTree String,
-  gmHumans :: Int,
-  gmRes :: Maybe String,
-  gmSkill :: Int
-  }
-data Proc = Proc {
-  prIn :: Handle,
-  prOut :: Handle,
-  prErr :: Handle,
-  prId :: ProcessHandle
-  }
 
 data Move = Move {
   fromP :: Maybe Piece,
@@ -62,10 +33,28 @@ data BdSq = Emp | HasP Color Piece
 
 type Pt = (Int, Int)
 
-data Bd = Bd (Array Pt BdSq)
+data Bd = Bd {
+  bdGrid :: Array Pt BdSq,
+  bdLastPawn2 :: Maybe Pt,
+  bdCanCastle :: M.Map Color (S.Set Piece),
+  bdTurn :: Color
+  }
   deriving (Eq)
 
 type Dir = Int -- 0 is East, 1 is North-East, .., 7
+
+bdInit = Bd {
+  bdGrid = listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
+  bdLastPawn2 = Nothing,
+  bdCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
+  bdTurn = CW
+  }
+  where
+  backrow = "RNBQKBNR"
+  frontrow = replicate bdW 'P'
+  b = map (HasP CB) $ backrow ++ frontrow
+  empzone = replicate (bdW * (bdH - 4)) Emp
+  w = map (HasP CW) $ frontrow ++ backrow
 
 bdW, bdH :: Int
 bdW = 8
@@ -133,10 +122,9 @@ onBd (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
 -- The engine does validation; we just need enough to do move disambiguation.
 -- todo: We _do_ have to worry about exposed check for disambig unfortunately.
 --       (but extremely rarely; I think crafty/xboard fuck this up actually!)
-sqCanGetTo :: (Int, Int) -> Game -> Bool -> [(Int, Int)]
-sqCanGetTo (y, x) gm isATake = let
-  Bd bd = gmBd gm
-  HasP turn p = bd ! (y, x)
+sqCanGetTo :: (Int, Int) -> Bd -> Bool -> [(Int, Int)]
+sqCanGetTo (y, x) bd isATake = let
+  HasP turn p = bdGrid bd ! (y, x)
   tryDir = tryDirPos (y, x)
   tryDirPos _ _ 0 dir = []
   tryDirPos (yPos, xPos) takeAll dist dir = let
@@ -150,7 +138,7 @@ sqCanGetTo (y, x) gm isATake = let
       6 -> (yPos - 1, xPos)
       7 -> (yPos - 1, xPos + 1)
     in if onBd pos'
-      then case bd ! pos' of
+      then case bdGrid bd ! pos' of
         Emp -> (if isATake && not takeAll then id else (pos':)) $
           tryDirPos pos' takeAll (dist - 1) dir
         _ -> if isATake then [pos'] else []
@@ -170,23 +158,22 @@ sqCanGetTo (y, x) gm isATake = let
 -- one or more of x1, y1 could be missing
 -- todo: when ambiguous, we should error instead of picking one?
 -- -- engine gets that for us
-resolveMv :: Game -> Move -> Either String Move
-resolveMv gm mv0 = let
+resolveMv :: Bd -> Move -> Either String Move
+resolveMv bd mv0 = let
   -- when start spot is omitted, we will know the piece
   fillP mv = case fromP mv of
     Just _ -> mv
     Nothing -> mv {fromP = Just 'P'}
 
-  Bd bd = gmBd gm
   tryXY :: ((Int, Int), BdSq) -> Move -> Move
   tryXY ((y, x), HasP turn p) mv = let
     eqOrN x yMbF = case yMbF mv of
       Just y -> x == y
       Nothing -> True
-    in if turn == gmTurn gm &&
+    in if turn == bdTurn bd &&
       eqOrN x fromX && eqOrN y fromY && p == fromJust (fromP mv) &&
       (fromJust $ toY mv, fromJust $ toX mv) `elem`
-      sqCanGetTo (y, x) gm (isATake mv)
+      sqCanGetTo (y, x) bd (isATake mv)
       then mv {fromX = Just x, fromY = Just y}
       else mv
   tryXY _ mv = mv
@@ -194,7 +181,7 @@ resolveMv gm mv0 = let
     Move {toX = Just _, toY = Just _} -> Right $
       if isJust (fromX mv0) && isJust (fromY mv0)
         then mv0
-        else foldr tryXY (fillP mv0) $ assocs bd
+        else foldr tryXY (fillP mv0) . assocs $ bdGrid bd
     Castle _ -> Right mv0
     _ -> Left "Could not resolve move"
 
@@ -202,39 +189,34 @@ isPawn :: BdSq -> Bool
 isPawn (HasP _ 'P') = True
 isPawn _ = False
 
-doMvPure :: String -> Move -> Game -> Either String Game
-doMvPure mvStr mv gm = case mv of
+bdDoMv :: Move -> Bd -> Bd
+bdDoMv mv bd = case mv of
   Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} ->
-    doChanges . considerEnPassant . considerPromotion $ changes where
+    doChanges . considerEnPassant $ considerPromotion changes where
       changes = [
-        ((y2, x2), bd ! (y1, x1)),
+        ((y2, x2), grid ! (y1, x1)),
         ((y1, x1), Emp)
         ]
+      -- todo: doesn't check lastPawn2..
       considerEnPassant changes = if
-        isPawn (bd ! (y1, x1)) && bd ! (y2, x2) == Emp && x1 /= x2
+        isPawn (grid ! (y1, x1)) && grid ! (y2, x2) == Emp && x1 /= x2
         then ((y1, x2), Emp):changes else changes
       considerPromotion changes = case promote mv of
         Nothing -> changes
-        Just p -> onHead (second . const $ HasP (gmTurn gm) p) changes
+        Just p -> onHead (second . const $ HasP turn p) changes
   Castle p -> let
-    c = gmTurn gm
-    y = if c == CW then 8 else 1
+    -- todo: doesn't check can-castle
+    y = if turn == CW then 8 else 1
     xKf = 5
     (xKt, xRf, xRt) = if p == 'K' then (7, 8, 6) else (3, 1, 4)
     in doChanges [
-      ((y, xKf), Emp), ((y, xKt), HasP c 'K'),
-      ((y, xRf), Emp), ((y, xRt), HasP c 'R')
+      ((y, xKf), Emp), ((y, xKt), HasP turn 'K'),
+      ((y, xRf), Emp), ((y, xRt), HasP turn 'R')
       ]
-  _ -> Left "Unknown move type"
   where
-  Bd bd = gmBd gm
-  doChanges changes = Right $ gm {
-    gmBd = Bd $ bd // changes,
-    gmTurn = if gmTurn gm == CW then CB else CW,
-    gmHist = PMT.descAdd mvStr $ gmHist gm
+  grid = bdGrid bd
+  turn = bdTurn bd
+  doChanges changes = bd {
+    bdGrid = grid // changes,
+    bdTurn = if bdTurn bd == CW then CB else CW
     }
-
-doMvStrPure :: String -> Game -> Either String Game
-doMvStrPure mvStr gm = do
-  mv <- resolveMv gm $ parseMv mvStr
-  doMvPure mvStr mv gm
