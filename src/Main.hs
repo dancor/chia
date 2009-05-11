@@ -105,7 +105,7 @@ initGm opts = do
     gmSkill = optSkill opts
     }
 
-gmBd :: Game -> Bd
+gmBd :: Game -> Board
 gmBd = foldl' (flip bdDoMv) bdInit . map fst . Pom.getPath . gmHist
 
 gmTurn :: Game -> Color

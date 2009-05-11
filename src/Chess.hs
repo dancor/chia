@@ -33,7 +33,7 @@ data BdSq = Emp | HasP Color Piece
 
 type Pt = (Int, Int)
 
-data Bd = Bd {
+data Board = Board {
   bdGrid :: Array Pt BdSq,
   bdLastPawn2 :: Maybe Pt,
   bdCanCastle :: M.Map Color (S.Set Piece),
@@ -43,7 +43,7 @@ data Bd = Bd {
 
 type Dir = Int -- 0 is East, 1 is North-East, .., 7
 
-bdInit = Bd {
+bdInit = Board {
   bdGrid = listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
   bdLastPawn2 = Nothing,
   bdCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
@@ -115,14 +115,14 @@ parseMv mvStr = case mvStr of
             promote = promote
             }
 
-onBd :: (Int, Int) -> Bool
-onBd (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
+onBoard :: (Int, Int) -> Bool
+onBoard (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
 
 -- We cheat and return more squares than may actually be legal.
 -- The engine does validation; we just need enough to do move disambiguation.
 -- todo: We _do_ have to worry about exposed check for disambig unfortunately.
 --       (but extremely rarely; I think crafty/xboard fuck this up actually!)
-sqCanGetTo :: (Int, Int) -> Bd -> Bool -> [(Int, Int)]
+sqCanGetTo :: (Int, Int) -> Board -> Bool -> [(Int, Int)]
 sqCanGetTo (y, x) bd isATake = let
   HasP turn p = bdGrid bd ! (y, x)
   tryDir = tryDirPos (y, x)
@@ -137,7 +137,7 @@ sqCanGetTo (y, x) bd isATake = let
       5 -> (yPos - 1, xPos - 1)
       6 -> (yPos - 1, xPos)
       7 -> (yPos - 1, xPos + 1)
-    in if onBd pos'
+    in if onBoard pos'
       then case bdGrid bd ! pos' of
         Emp -> (if isATake && not takeAll then id else (pos':)) $
           tryDirPos pos' takeAll (dist - 1) dir
@@ -148,7 +148,7 @@ sqCanGetTo (y, x) bd isATake = let
     'Q' -> concatMap (tryDir False 8) [0..7]
     'R' -> concatMap (tryDir False 8) [0, 2, 4, 6]
     'B' -> concatMap (tryDir False 8) [1, 3, 5, 7]
-    'N' -> filter onBd $
+    'N' -> filter onBoard $
       [(y + oy, x + ox) | oy <- [-2, 2], ox <- [-1, 1]] ++
       [(y + oy, x + ox) | oy <- [-1, 1], ox <- [-2, 2]]
     'P' -> if isATake
@@ -158,7 +158,7 @@ sqCanGetTo (y, x) bd isATake = let
 -- one or more of x1, y1 could be missing
 -- todo: when ambiguous, we should error instead of picking one?
 -- -- engine gets that for us
-resolveMv :: Bd -> Move -> Either String Move
+resolveMv :: Board -> Move -> Either String Move
 resolveMv bd mv0 = let
   -- when start spot is omitted, we will know the piece
   fillP mv = case fromP mv of
@@ -189,7 +189,7 @@ isPawn :: BdSq -> Bool
 isPawn (HasP _ 'P') = True
 isPawn _ = False
 
-bdDoMv :: Move -> Bd -> Bd
+bdDoMv :: Move -> Board -> Board
 bdDoMv mv bd = case mv of
   Move {fromX = Just x1, fromY = Just y1, toX = Just x2, toY = Just y2} ->
     doChanges . considerEnPassant $ considerPromotion changes where
