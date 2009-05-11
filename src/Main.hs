@@ -72,7 +72,8 @@ showBdGrid grid = let
       HasP CB c -> show $ HasP CW c
     else AC.blackBg ++ AC.white ++ show p
   stopWeirdWhiteLinesInTermSometimes = (++ AC.blackBg)
-  in (interlines . map (stopWeirdWhiteLinesInTermSometimes . concat) .
+  in (interlines . reverse .
+  map (stopWeirdWhiteLinesInTermSometimes . concat) .
   splitN bdW . map showAlt . assocs) grid ++ AC.normal
 
 chProg :: [Char]

@@ -44,7 +44,7 @@ data Board = Board {
 type Dir = Int -- 0 is East, 1 is North-East, .., 7
 
 bdInit = Board {
-  bdGrid = listArray ((1, 1), (bdW, bdH)) $ b ++ empzone ++ w,
+  bdGrid = listArray ((1, 1), (bdW, bdH)) $ w ++ empzone ++ b,
   bdLastPawn2 = Nothing,
   bdCanCastle = M.fromList [(c, S.fromList "qk") | c <- [CW, CB]],
   bdTurn = CW
@@ -52,9 +52,9 @@ bdInit = Board {
   where
   backrow = "RNBQKBNR"
   frontrow = replicate bdW 'P'
-  b = map (HasP CB) $ backrow ++ frontrow
+  b = map (HasP CB) $ frontrow ++ backrow
   empzone = replicate (bdW * (bdH - 4)) Emp
-  w = map (HasP CW) $ frontrow ++ backrow
+  w = map (HasP CW) $ backrow ++ frontrow
 
 bdW, bdH :: Int
 bdW = 8
@@ -76,7 +76,7 @@ parseMv mvStr = case mvStr of
     xChs = "abcdefgh"
     yChs = "12345678"
     parseX x = ord x - ord 'a' + 1
-    parseY y = bdH - ord y + ord '1'
+    parseY y = read [y]
     tryFrom :: String -> String -> (Maybe Char, String)
     tryFrom chs s = if null s then (Nothing, s) else let s1:sRest = s in
       if s1 `elem` chs then (Just s1, sRest) else (Nothing, s)
@@ -152,8 +152,8 @@ sqCanGetTo (y, x) bd isATake = let
       [(y + oy, x + ox) | oy <- [-2, 2], ox <- [-1, 1]] ++
       [(y + oy, x + ox) | oy <- [-1, 1], ox <- [-2, 2]]
     'P' -> if isATake
-      then concatMap (tryDir True 1) (if turn == CW then [5, 7] else [1, 3])
-      else tryDir False 2 (if turn == CW then 6 else 2)
+      then concatMap (tryDir True 1) (if turn == CW then [1, 3] else [5, 7])
+      else tryDir False 2 (if turn == CW then 2 else 6)
 
 -- one or more of x1, y1 could be missing
 -- todo: when ambiguous, we should error instead of picking one?
@@ -213,6 +213,7 @@ bdDoMv mv bd = case mv of
       ((y, xKf), Emp), ((y, xKt), HasP turn 'K'),
       ((y, xRf), Emp), ((y, xRt), HasP turn 'R')
       ]
+  _ -> error $ "incomplete move to bdDoMove: " ++ show mv
   where
   grid = bdGrid bd
   turn = bdTurn bd
