@@ -162,7 +162,7 @@ compMv gm = do
       if "move " `isPrefixOf` compStr
         then do
           let 'm':'o':'v':'e':' ':compMvStr = compStr
-          compMv <- eithErr . resolveMv (gmBd gm') $ parseMv compMvStr
+          compMv <- eithErr $ resolveMv (gmBd gm') =<< parseMv compMvStr
           let gm'' = doMvPure compMvStr compMv gm'
           return (compMvStr, tryRes pRetLs gm'')
         else throwError "Could not determine computer move."
@@ -202,7 +202,7 @@ doMvPure mvStr mv gm = gm {gmHist = Pom.descAdd (mv, mvStr) $ gmHist gm}
 
 doMvStr :: String -> Game -> ErrorT String IO Game
 doMvStr mvStr gm = do
-  mv <- eithErr . resolveMv (gmBd gm) $ parseMv mvStr
+  mv <- eithErr $ resolveMv (gmBd gm) =<< parseMv mvStr
   doMv mvStr mv gm
 
 saveGm :: Game -> IO ()

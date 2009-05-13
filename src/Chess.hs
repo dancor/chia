@@ -56,10 +56,10 @@ modRet f = do
   put g'
   return x
 
-parseMv :: String -> Move
+parseMv :: String -> Either String Move
 parseMv mvStr = case runParser moveAnnParser () "" mvStr of
-  Left err -> error $ "could not parse move " ++ show mvStr ++ ": " ++ show err
-  Right (mv, _) -> mv
+  Left err -> Left $ "could not parse move " ++ show mvStr ++ ": " ++ show err
+  Right (mv, _) -> Right mv
 
 onBoard :: (Int, Int) -> Bool
 onBoard (y, x) = y >= 1 && y <= bdH && x >= 1 && x <= bdW
