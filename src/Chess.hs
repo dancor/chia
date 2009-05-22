@@ -124,9 +124,11 @@ resolveMv bd mv0 = let
   tryXY _ mv = mv
   in case mv0 of
     Castle _ -> Right mv0
-    _ -> Right $ if isJust (mvFromX mv0) && isJust (mvFromY mv0)
-      then mv0
-      else foldr tryXY (fillP mv0) . assocs $ bdGrid bd
+    _ -> if isJust (mvFromX mv0) && isJust (mvFromY mv0)
+      then Right mv0
+      else case foldr tryXY (fillP mv0) . assocs $ bdGrid bd of
+        mv@(Move {mvFromX = Just _, mvFromY = Just _}) -> Right mv
+        _ -> Left "Could not resolve move."
 
 isPawn :: BdSq -> Bool
 isPawn (HasP _ 'P') = True
